@@ -116,7 +116,7 @@ joblib.dump(clf_model, 'irrigation_model.pkl')
 # -------------------------------
 # 9️⃣ Streamlit Interface
 # -------------------------------
-st.title("ML-based Crop Water Requirement & Irrigation Prediction")
+st.title("🌱ML-based Crop Water Requirement & Irrigation Prediction")
 
 st.sidebar.header("Input Crop Data")
 crop_list = merged['crop'].dropna().unique().tolist()
