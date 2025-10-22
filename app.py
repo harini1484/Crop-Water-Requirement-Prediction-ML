@@ -9,15 +9,28 @@ from sklearn.preprocessing import LabelEncoder
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 
 # -------------------------------
-# 2️⃣ Load datasets
+# 2️⃣ Streamlit App Title
 # -------------------------------
-dataset1 = pd.read_csv("Crop_recommendation.csv")
-dataset3 = pd.read_csv("crop_and_soil.csv")
+st.title("🌱 ML-based Crop Water Requirement & Irrigation Prediction")
 
 # -------------------------------
-# 3️⃣ Clean column names
+# 3️⃣ Load CSV Files Safely
+# -------------------------------
+def load_csv(file_name):
+    if os.path.exists(file_name):
+        return pd.read_csv(file_name)
+    else:
+        st.error(f"❌ Required file '{file_name}' not found. Upload it in the repo root.")
+        st.stop()
+
+dataset1 = load_csv("Crop_recommendation.csv")
+dataset3 = load_csv("crop_and_soil.csv")
+
+# -------------------------------
+# 4️⃣ Clean Column Names
 # -------------------------------
 def clean_columns(df):
     df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
@@ -27,7 +40,7 @@ dataset1 = clean_columns(dataset1)
 dataset3 = clean_columns(dataset3)
 
 # -------------------------------
-# 4️⃣ Standardize important columns
+# 5️⃣ Standardize Columns
 # -------------------------------
 dataset1.rename(columns={
     'label': 'crop',
@@ -48,7 +61,7 @@ dataset3.rename(columns={
 }, inplace=True)
 
 # -------------------------------
-# 5️⃣ Merge datasets safely
+# 6️⃣ Merge datasets safely
 # -------------------------------
 merged = pd.merge(dataset1, dataset3, on='crop', how='left')
 merged['soil_type'] = merged.get('soil_type', pd.Series('Unknown')).fillna('Unknown')
@@ -58,14 +71,12 @@ for col in ['n','p','k','temp_c','humidity_percent']:
         merged[col] = 50
 
 # -------------------------------
-# 6️⃣ Define crop factor multipliers
+# 7️⃣ Define Crop Factor Multipliers
 # -------------------------------
-crop_factors = {}
-for crop_name in merged['crop'].unique():
-    crop_factors[crop_name] = 0.8 + 0.4 * hash(crop_name) % 100 / 100
+crop_factors = {crop_name: 0.8 + 0.4 * hash(crop_name) % 100 / 100 for crop_name in merged['crop'].unique()}
 
 # -------------------------------
-# 7️⃣ FAO-56 Penman-Monteith formula for CWR
+# 8️⃣ FAO-56 Penman-Monteith formula
 # -------------------------------
 def calculate_cwr(Tmax, Tmin, RH_mean, Rs=15, u2=2, z=50):
     Tmean = (Tmax + Tmin) / 2
@@ -81,15 +92,15 @@ def calculate_cwr(Tmax, Tmin, RH_mean, Rs=15, u2=2, z=50):
     ET0 = (0.408 * delta * (Rn - G) + gamma * (900/(Tmean + 273)) * u2 * (es - ea)) / (delta + gamma * (1 + 0.34*u2))
     return ET0
 
-# -------------------------------
-# 8️⃣ Prepare irrigation ML model
-# -------------------------------
 merged['CWR_mm_per_day'] = merged.apply(lambda row: calculate_cwr(
     Tmax=row['temp_c']+5,
     Tmin=row['temp_c']-5,
     RH_mean=row['humidity_percent']
 ) * crop_factors[row['crop']], axis=1)
 
+# -------------------------------
+# 9️⃣ Irrigation Label Function
+# -------------------------------
 def irrigation_label(row):
     if row['CWR_mm_per_day'] > 0 and row['soil_moisture_percent'] < 10:
         return 'Drip/Furrow'
@@ -102,6 +113,9 @@ def irrigation_label(row):
 
 merged['irrigation_type'] = merged.apply(irrigation_label, axis=1)
 
+# -------------------------------
+# 10️⃣ Encode Crops
+# -------------------------------
 crop_encoder = LabelEncoder()
 merged['crop_encoded'] = crop_encoder.fit_transform(merged['crop'])
 
@@ -109,15 +123,19 @@ features_clf = ['crop_encoded','CWR_mm_per_day','n','p','k','soil_moisture_perce
 X_clf = merged[features_clf]
 y_clf = merged['irrigation_type']
 
-clf_model = RandomForestClassifier(n_estimators=200, random_state=42)
-clf_model.fit(X_clf, y_clf)
-joblib.dump(clf_model, 'irrigation_model.pkl')
+# -------------------------------
+# 11️⃣ Load or Train Model
+# -------------------------------
+if os.path.exists('irrigation_model.pkl'):
+    clf_model = joblib.load('irrigation_model.pkl')
+else:
+    clf_model = RandomForestClassifier(n_estimators=200, random_state=42)
+    clf_model.fit(X_clf, y_clf)
+    # Don't attempt to save on Streamlit Cloud
 
 # -------------------------------
-# 9️⃣ Streamlit Interface
+# 12️⃣ Streamlit Sidebar Inputs
 # -------------------------------
-st.title("🌱ML-based Crop Water Requirement & Irrigation Prediction")
-
 st.sidebar.header("Input Crop Data")
 crop_list = merged['crop'].dropna().unique().tolist()
 crop = st.sidebar.selectbox("Select Crop", crop_list)
@@ -128,6 +146,9 @@ P = st.sidebar.number_input("Phosphorous (P)", 0, 100, 50)
 K = st.sidebar.number_input("Potassium (K)", 0, 100, 50)
 soil_moisture = st.sidebar.number_input("Soil Moisture (%)", 0, 100, 40)
 
+# -------------------------------
+# 13️⃣ Prediction Button
+# -------------------------------
 if st.button("Predict"):
     factor = crop_factors[crop]
     Tmax = temp + 5
@@ -135,7 +156,6 @@ if st.button("Predict"):
     cwr_pred = calculate_cwr(Tmax, Tmin, humidity) * factor
 
     crop_enc = crop_encoder.transform([crop])[0]
-    clf_model = joblib.load('irrigation_model.pkl')
     irrigation_pred = clf_model.predict([[crop_enc, cwr_pred, N, P, K, soil_moisture]])[0]
 
     st.write(f"**Selected Crop:** {crop}")
@@ -143,7 +163,7 @@ if st.button("Predict"):
     st.write(f"**Recommended Irrigation Type:** {irrigation_pred}")
 
     # -------------------------------
-    # 1️⃣0️⃣ Plot CWR vs Temperature for this crop
+    # 14️⃣ Plot CWR vs Temperature
     # -------------------------------
     temps = np.arange(10, 41, 1)
     cwr_values = [calculate_cwr(t+5, t-5, humidity) * factor for t in temps]
